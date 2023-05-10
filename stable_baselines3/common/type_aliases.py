@@ -35,6 +35,18 @@ class RolloutBufferSamples(NamedTuple):
     advantages: th.Tensor
     returns: th.Tensor
 
+class RolloutRNDBufferSamples(NamedTuple):
+    observations: th.Tensor
+    next_observations: th.Tensor
+    actions: th.Tensor
+    old_values: th.Tensor
+    old_int_values: th.Tensor
+    old_log_prob: th.Tensor
+    advantages: th.Tensor
+    int_advantages: th.Tensor
+    returns: th.Tensor
+    int_returns: th.Tensor
+
 
 class DictRolloutBufferSamples(NamedTuple):
     observations: TensorDict

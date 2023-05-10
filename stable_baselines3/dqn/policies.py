@@ -176,6 +176,10 @@ class DQNPolicy(BasePolicy):
     def _predict(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
         return self.q_net._predict(obs, deterministic=deterministic)
 
+    def _action_probs(self, obs: th.Tensor) -> th.Tensor:
+        q_values = self.q_net(obs)
+        return th.softmax(q_values, dim=1)
+
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         data = super()._get_constructor_parameters()
 

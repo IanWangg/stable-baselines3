@@ -10,6 +10,7 @@ except ImportError:
     cv2 = None
 
 from stable_baselines3.common.type_aliases import GymObs, GymStepReturn
+from copy import deepcopy, copy
 
 
 class StickyActionEnv(gym.Wrapper):
@@ -235,6 +236,40 @@ class WarpFrame(gym.ObservationWrapper):
         return frame[:, :, None]
 
 
+class AddRandomStateToInfoEnv(gym.Wrapper):
+    def __init__(self, env):
+        gym.Wrapper.__init__(self, env)
+        self.rng_at_episode_start = deepcopy(self.unwrapped.np_random)
+
+    def step(self, action):
+        state, reward, done, info = self.env.step(int(action))
+        if done:
+            if 'episode' not in info:
+                info['episode'] = {}
+            info['episode']['rng_at_episode_start'] = self.rng_at_episode_start
+        return state, reward, done, info
+
+    def reset(self):
+        self.rng_at_episode_start = deepcopy(self.unwrapped.np_random)
+        return self.env.reset()
+
+class MaxEpisodeLengthEnv(gym.Wrapper):
+    def __init__(self, env, limit=4500):
+        gym.Wrapper.__init__(self, env)
+        self.count_steps = 0
+        self.limit = limit
+
+    def step(self, action):
+        state, reward, done, info = self.env.step(int(action))
+        done = done if self.count_steps < self.limit else True
+        self.count_steps += 1
+        return state, reward, done, info
+
+    def reset(self):
+        self.count_steps = 0
+        return self.env.reset()
+
+
 class AtariWrapper(gym.Wrapper):
     """
     Atari 2600 preprocessings
@@ -275,7 +310,11 @@ class AtariWrapper(gym.Wrapper):
         terminal_on_life_loss: bool = True,
         clip_reward: bool = True,
         action_repeat_probability: float = 0.0,
+        montezuma: bool = False,
     ) -> None:
+        if "Montezuma" in str(env) or "Pitfall" in str(env):
+            env._max_episode_steps = 4500
+
         if action_repeat_probability > 0.0:
             env = StickyActionEnv(env, action_repeat_probability)
         if noop_max > 0:
@@ -290,5 +329,14 @@ class AtariWrapper(gym.Wrapper):
         env = WarpFrame(env, width=screen_size, height=screen_size)
         if clip_reward:
             env = ClipRewardEnv(env)
+
+        if "Montezuma" in str(env) or "Pitfall" in str(env):
+            # env = MontezumaInfoWrapper(env, room_address=3 if "Montezuma" in str(env) else 1)
+            # env = AddRandomStateToInfoEnv(env)
+            print('Creating Exploration env')
+            env = MaxEpisodeLengthEnv(env, limit=4500)
+        else:
+            # env = DummyMontezumaInfoWrapper(env)
+            pass
 
         super().__init__(env)

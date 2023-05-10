@@ -14,6 +14,8 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedul
 from stable_baselines3.common.utils import get_linear_fn, get_parameters_by_name, is_vectorized_observation, polyak_update
 from stable_baselines3.dqn.policies import CnnPolicy, DQNPolicy, MlpPolicy, MultiInputPolicy
 
+from stable_baselines3.common.evaluation import evaluate_policy
+
 SelfDQN = TypeVar("SelfDQN", bound="DQN")
 
 
@@ -93,6 +95,7 @@ class DQN(OffPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
+        eval_env: GymEnv = None,
     ):
         super().__init__(
             policy,
@@ -131,6 +134,11 @@ class DQN(OffPolicyAlgorithm):
         # Linear schedule will be defined in `_setup_model()`
         self.exploration_schedule = None
         self.q_net, self.q_net_target = None, None
+
+        self.eval_env = eval_env
+        self.performance = []
+
+        self.Q_loss = []
 
         if _init_setup_model:
             self._setup_model()
@@ -220,6 +228,20 @@ class DQN(OffPolicyAlgorithm):
 
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/loss", np.mean(losses))
+
+        self.Q_loss.append(np.mean(losses))
+
+        # print(f'Training {self._n_updates}')
+        if self.eval_env and self._n_updates % 100000 == 0:
+            results, length = evaluate_policy(
+                model=self.policy,
+                env=self.eval_env,
+                n_eval_episodes=10,
+                return_episode_rewards=True,
+            )
+            self.performance.append(results)
+            np.save(f'/home/ywang3/workplace/theory_inspired/decouple/stable-baselines3/decouple_results/DQN_Breakout', self.performance)
+            np.save(f'/home/ywang3/workplace/theory_inspired/decouple/stable-baselines3/decouple_results/DQN_Breakout_loss', self.Q_loss)
 
     def predict(
         self,
