@@ -9,7 +9,7 @@ from stable_baselines3.common.callbacks import EvalCallback
 from typing import Callable
 
 if __name__ == '__main__':
-    env_name = 'BreakoutNoFrameskip-v4'
+    env_name = 'MontezumaRevengeNoFrameskip-v4'
     # env_name = 'BreakoutNoFrameskip-v4'
     # env_name = 'VentureNoFrameskip-v4'
     
@@ -39,7 +39,7 @@ if __name__ == '__main__':
         env_name, 
         # wrapper_class=sparse_reward_wrapper,
         # wrapper_kwargs={'montezuma': False},
-        n_envs=8,
+        n_envs=128,
         seed=1,
         vec_env_cls=SubprocVecEnv
     )
@@ -62,15 +62,15 @@ if __name__ == '__main__':
         clip_range=linear_schedule(0.1),
         n_steps=128,
         n_epochs=4,
-        batch_size=256,
+        batch_size=4,
         verbose=1,
     )
     
 
 
     model.learn(
-        total_timesteps=int(10_000_000),
-        tb_log_name=f'RND_Breakout',
+        total_timesteps=int(100_000_000),
+        tb_log_name=f'RND_MR',
         reset_num_timesteps=True,
-        progress_bar=True,
+        progress_bar=False,
     )

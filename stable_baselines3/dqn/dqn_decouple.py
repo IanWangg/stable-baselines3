@@ -23,6 +23,8 @@ from stable_baselines3.rnd.policies import TargetModel, PredictorModel
 
 from stable_baselines3.common.evaluation import evaluate_policy
 
+from stable_baselines3.common.running_mean_std import RunningMeanStd
+
 SelfDQN_Decouple = TypeVar("SelfDQN_Decouple", bound="DQN_Decouple")
 
 
@@ -131,6 +133,7 @@ class DQN_Decouple(OffPolicyAlgorithm):
         start_geom: float = 0.99,
         end_geom: float=0.999,
         non_rollin_prob: float=0.1,
+        lam: float=1.0,
     ):
         super().__init__(
             policy,
@@ -174,10 +177,12 @@ class DQN_Decouple(OffPolicyAlgorithm):
         self.start_geom = start_geom
         self.end_geom = end_geom
         self.non_rollin_prob = non_rollin_prob
+        self.lam = lam
         self.exploratory_samples = 0
 
         self.eval_env = eval_env
         self.performance = []
+        self.explore_performance = []
 
         self.Q_loss = []
         self.explore_Q_loss = []
@@ -221,6 +226,17 @@ class DQN_Decouple(OffPolicyAlgorithm):
             self.exploration_final_eps,
             self.exploration_fraction,
         )
+
+        self.explore_replay_buffer = self.replay_buffer_class(
+            self.buffer_size,
+            self.observation_space,
+            self.action_space,
+            device=self.device,
+            n_envs=self.n_envs,
+            optimize_memory_usage=self.optimize_memory_usage,
+            **self.replay_buffer_kwargs.copy(),  # pytype:disable=wrong-keyword-args
+        )
+
         # Account for multiple environments
         # each call to step() corresponds to n_envs transitions
         if self.n_envs > 1:
@@ -267,9 +283,12 @@ class DQN_Decouple(OffPolicyAlgorithm):
 
         losses = []
         explore_losses = []
+        bonuses = []
         for _ in range(gradient_steps):
             # Sample replay buffer
             replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+
+            explore_replay_data = self.explore_replay_buffer.sample(batch_size, env=self._vec_normalize_env)
 
             with th.no_grad():
                 # Compute the next Q-values using the target network
@@ -282,23 +301,25 @@ class DQN_Decouple(OffPolicyAlgorithm):
                 target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
 
                 # compute the target for explore policy
-                explore_next_q_values = self.explore_q_net_target(replay_data.next_observations)
+                explore_next_q_values = self.explore_q_net_target(explore_replay_data.next_observations)
                 explore_next_q_values, _ = explore_next_q_values.max(dim=1)
                 explore_next_q_values = explore_next_q_values.reshape(-1, 1)
-                explore_target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * explore_next_q_values
+                explore_target_q_values = explore_replay_data.rewards + (1 - explore_replay_data.dones) * self.gamma * explore_next_q_values
 
                 # get bonus
-                next_observations_slice = replay_data.next_observations[:, -1:, :, :]
+                next_observations_slice = explore_replay_data.next_observations[:, -1:, :, :].float() / 255.0
+                # print(f"========== {next_observations_slice.shape, next_observations_slice.dtype, replay_data.next_observations.dtype} ===========")
                 predictor_output = self.rnd_predictor(next_observations_slice)
                 target_output = self.rnd_target(next_observations_slice)
-                bonus = (predictor_output - target_output).pow(2).mean(1)
-
+                bonus = (predictor_output - target_output).pow(2).mean(1).unsqueeze(-1) * self.lam
+                bonuses.append(bonus.mean().item())
+                # print(bonus.shape, explore_target_q_values.shape)
                 # add bonus to the explore target in a non-episodic manner
                 explore_target_q_values += bonus
 
             # Get current Q-values estimates
             current_q_values = self.q_net(replay_data.observations)
-            explore_current_q_values = self.explore_q_net(replay_data.observations)
+            explore_current_q_values = self.explore_q_net(explore_replay_data.observations)
 
             # Retrieve the q-values for the actions from the replay buffer
             current_q_values = th.gather(current_q_values, dim=1, index=replay_data.actions.long())
@@ -326,11 +347,21 @@ class DQN_Decouple(OffPolicyAlgorithm):
             th.nn.utils.clip_grad_norm_(self.explore_policy.parameters(), self.max_grad_norm)
             self.explore_policy.optimizer.step()
 
+            # update RND module
+            if np.random.rand() < 0.05:
+                rnd_predict = self.rnd_predictor(explore_replay_data.next_observations[:, -1:, :, :].float() / 255.0)
+                rnd_target = self.rnd_target(explore_replay_data.next_observations[:, -1:, :, :].float() / 255.0)
+                rnd_loss = F.mse_loss(rnd_predict, rnd_target)
+                self.rnd_optimizer.zero_grad()
+                rnd_loss.backward()
+                self.rnd_optimizer.step()
+
         # Increase update counter
         self._n_updates += gradient_steps
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/loss", np.mean(losses))
         self.logger.record("train/explore_loss", np.mean(explore_losses))
+        self.logger.record("train/bonus", np.mean(bonuses))
         self.Q_loss.append(np.mean(losses))
         self.explore_Q_loss.append(np.mean(explore_losses))
 
@@ -342,9 +373,27 @@ class DQN_Decouple(OffPolicyAlgorithm):
                 n_eval_episodes=5,
                 return_episode_rewards=True,
             )
+
+            explore_results, length = evaluate_policy(
+                model=self.explore_policy,
+                env=self.eval_env,
+                n_eval_episodes=5,
+                return_episode_rewards=True,
+            )
             self.performance.append(results)
-            np.save(f'/home/ywang3/workplace/theory_inspired/decouple/stable-baselines3/decouple_results/DQN_Decouple_Breakout', self.performance)
-            np.save(f'/home/ywang3/workplace/theory_inspired/decouple/stable-baselines3/decouple_results/DQN_Decouple_Breakout_loss', self.Q_loss)
+            self.explore_performance.append(explore_results)
+            np.save(
+                f'/home/ywang3/workplace/theory_inspired/decouple/atari_experiments/stable-baselines3/decouple_results/DQN_MR_Breakout', 
+                self.performance
+            )
+            np.save(
+                f'/home/ywang3/workplace/theory_inspired/decouple/atari_experiments/stable-baselines3/decouple_results/DQN_MR_Breakout_explore', 
+                self.explore_performance
+            )
+            np.save(
+                f'/home/ywang3/workplace/theory_inspired/decouple/atari_experiments/stable-baselines3/decouple_results/DQN_MR_Breakout_loss', 
+                self.Q_loss
+            )
 
     def predict(
         self,
@@ -407,6 +456,7 @@ class DQN_Decouple(OffPolicyAlgorithm):
                 callback=callback,
                 learning_starts=self.learning_starts,
                 replay_buffer=self.replay_buffer,
+                explore_replay_buffer=self.explore_replay_buffer,
                 log_interval=log_interval,
             )
 
@@ -449,7 +499,6 @@ class DQN_Decouple(OffPolicyAlgorithm):
         """
         assert n_envs == 1, "Only support single env right now"
 
-        # Select action randomly or according to policy
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
             # Warmup phase
             unscaled_action = np.array([self.action_space.sample() for _ in range(n_envs)])
@@ -482,6 +531,7 @@ class DQN_Decouple(OffPolicyAlgorithm):
         callback: BaseCallback,
         train_freq: TrainFreq,
         replay_buffer: ReplayBuffer,
+        explore_replay_buffer: ReplayBuffer,
         action_noise: Optional[ActionNoise] = None,
         learning_starts: int = 0,
         log_interval: Optional[int] = None,
@@ -537,10 +587,10 @@ class DQN_Decouple(OffPolicyAlgorithm):
                 self.exploratory_samples += 1
                 actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs, explore=True)
 
-            self.episodic_step += 1
-
             # Rescale and perform action
             new_obs, rewards, dones, infos = env.step(actions)
+
+            # self.state_rms.update(new_obs[-1, :, :].reshape(1, 1, 84, 84))
 
             self.num_timesteps += env.num_envs
             num_collected_steps += 1
@@ -555,7 +605,11 @@ class DQN_Decouple(OffPolicyAlgorithm):
             self._update_info_buffer(infos, dones)
 
             # Store data in replay buffer (normalized action and unnormalized observation)
-            self._store_transition(replay_buffer, buffer_actions, new_obs, rewards, dones, infos)
+            if self.episodic_step < self.truncate_length:
+                self._store_transition(replay_buffer, buffer_actions, new_obs, rewards, dones, infos)
+                self._store_transition(explore_replay_buffer, buffer_actions, new_obs, rewards, dones, infos)
+            else:
+                self._store_transition(explore_replay_buffer, buffer_actions, new_obs, rewards, dones, infos)
 
             self._update_current_progress_remaining(self.num_timesteps, self._total_timesteps)
 
@@ -563,6 +617,7 @@ class DQN_Decouple(OffPolicyAlgorithm):
             # and update the exploration schedule
             # For SAC/TD3, the update is dones as the same time as the gradient update
             # see https://github.com/hill-a/stable-baselines/issues/900
+            self.episodic_step += 1
             self._on_step()
 
             for idx, done in enumerate(dones):

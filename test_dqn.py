@@ -1,7 +1,7 @@
 import gym
 import stable_baselines3
 from stable_baselines3.ppo.ppo import PPO
-from stable_baselines3.dqn.dqn_decouple import DQN_Decouple
+from stable_baselines3.dqn.dqn import DQN
 from stable_baselines3.common.env_util import make_atari_env, make_vec_env
 from stable_baselines3.common.vec_env import VecFrameStack, DummyVecEnv, SubprocVecEnv, VecEnv, VecTransposeImage
 from stable_baselines3.common.callbacks import EvalCallback
@@ -9,7 +9,7 @@ from stable_baselines3.common.callbacks import EvalCallback
 from typing import Callable
 
 if __name__ == '__main__':
-    env_name = 'MontezumaRevengeNoFrameskip-v4'
+    env_name = 'BreakoutNoFrameskip-v4'
     
     def linear_schedule(initial_value: float) -> Callable[[float], float]:
         """
@@ -55,12 +55,12 @@ if __name__ == '__main__':
     # eval_env.obs_rms = env.obs_rms
     
     
-    model = DQN_Decouple(
+    model = DQN(
         env=env,
         eval_env=eval_env,
         policy='CnnPolicy',
         learning_rate=1e-4,
-        tensorboard_log='./MR',
+        tensorboard_log='./Breakout',
         train_freq=4,
         batch_size=32,
         buffer_size=1000000,
@@ -68,7 +68,7 @@ if __name__ == '__main__':
         exploration_fraction=0.1,
         exploration_final_eps=0.01,
         target_update_interval=1000,
-        lam=10.0,
+        # lam=10.0,
         optimize_memory_usage=False,
         verbose=1,
     )
@@ -76,8 +76,8 @@ if __name__ == '__main__':
 
 
     model.learn(
-        total_timesteps=int(100_000_000),
-        tb_log_name=f'DQN_MR_Decouple',
+        total_timesteps=int(10_000_000),
+        tb_log_name=f'DQN_Breakout',
         reset_num_timesteps=True,
         progress_bar=True,
     )

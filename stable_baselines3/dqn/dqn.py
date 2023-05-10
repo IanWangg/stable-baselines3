@@ -240,8 +240,12 @@ class DQN(OffPolicyAlgorithm):
                 return_episode_rewards=True,
             )
             self.performance.append(results)
-            np.save(f'/home/ywang3/workplace/theory_inspired/decouple/stable-baselines3/decouple_results/DQN_Breakout', self.performance)
-            np.save(f'/home/ywang3/workplace/theory_inspired/decouple/stable-baselines3/decouple_results/DQN_Breakout_loss', self.Q_loss)
+            np.save(
+                f'/home/ywang3/workplace/theory_inspired/decouple/atari_experiments/stable-baselines3/decouple_results/DQN_Breakout', 
+                self.performance)
+            np.save(
+                f'/home/ywang3/workplace/theory_inspired/decouple/atari_experiments/stable-baselines3/decouple_results/DQN_Breakout_loss', 
+                self.Q_loss)
 
     def predict(
         self,
